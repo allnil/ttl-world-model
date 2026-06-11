@@ -4,23 +4,11 @@ import torch
 from world_model import encode
 
 
-# def predict_transition(model, state, action):
-#     actions = np.array([int(action)], dtype=np.int64)
-#
-#     states = np.repeat(state[None, :], len(actions), axis=0)
-#     x = encode(states, actions)
-#
-#     with torch.no_grad():
-#         board_logits, reward_logits, done_logits = model(x)
-#
-#     pred_next_board = board_logits.argmax(dim=2)[0].numpy() - 1
-#     pred_reward = int(reward_logits.argmax(dim=1)[0].item() - 1)
-#     pred_done = bool(torch.sigmoid(done_logits)[0].item() > 0.5)
-#
-#     return pred_next_board, pred_reward, pred_done
-#
 def predict_transitions(model, state, actions):
     actions = np.asarray(actions, dtype=np.int64)
+
+    assert actions.ndim == 1, f"expected array of actions, get {actions!r}"
+
     states = np.repeat(state[None, :], len(actions), axis=0)
     x = encode(states, actions)
     with torch.no_grad():
@@ -32,10 +20,10 @@ def predict_transitions(model, state, actions):
 
 
 def predict_next_state(model, state, action):
-    pred_next_board, pred_reward, pred_done = predict_transitions(model, state, action)
-    pred_next_player = -int(state[9])
-    pred_next_state = np.append(pred_next_board, pred_next_player).astype(np.int8)
-    return pred_next_state, pred_reward, pred_done
+    next_boards, rewards, dones = predict_transitions(model, state, [int(action)])
+    next_player = -int(state[9])
+    next_state = np.append(next_boards[0], next_player).astype(np.int8)
+    return next_state, int(rewards[0]), bool(dones[0])
 
 
 def legal_actions_from_state(state):
@@ -101,7 +89,7 @@ def choose_move_two_step(model, state):
     return int(best_action), best_score
 
 
-cache = {}  # (board.tobytes(), player) → score
+cache = {}
 
 
 def minimax_score(model, state, depth, root_player):
@@ -113,20 +101,7 @@ def minimax_score(model, state, depth, root_player):
 
     if depth == 0 or len(actions) == 0:
         return 0
-    #
-    # current_player = int(state[9])
-    # scores = []
-    #
-    # for action in actions:
-    #     next_state, reward, done = predict_next_state(model, state, action)
-    #
-    #     if done:
-    #         score = reward_for_player(reward, root_player)
-    #     else:
-    #         score = minimax_score(model, next_state, depth - 1, root_player)
-    #
-    #     scores.append(score)
-    #
+
     current_player = int(state[9])
     next_boards, rewards, dones = predict_transitions(model, state, actions)
 
@@ -147,27 +122,21 @@ def minimax_score(model, state, depth, root_player):
     return result
 
 
-def choose_move_minimax(model, state, depth):
+def choose_move_minimax(model, state, depth, rng):
     model.eval()
-
     root_player = int(state[9])
-    best_action = None
-    best_score = -10
-
-    for action in legal_actions_from_state(state):
-        next_state, reward, done = predict_next_state(model, state, action)
-
-        if done:
-            score = reward_for_player(reward, root_player)
-        else:
-            score = minimax_score(model, next_state, depth - 1, root_player)
-
-        if score > best_score:
-            best_score = score
-            best_action = action
-
-    if best_action is None:
+    actions = legal_actions_from_state(state)
+    if len(actions) == 0:
         raise ValueError("no legal actions available")
 
-    best = [a for a, s in zip(all_actions, all_scores) if s == best_score]
+    scores = []
+    for action in actions:
+        next_state, reward, done = predict_next_state(model, state, action)
+        if done:
+            scores.append(reward_for_player(int(reward), root_player))
+        else:
+            scores.append(minimax_score(model, next_state, depth - 1, root_player))
+
+    best_score = max(scores)
+    best = [int(a) for a, s in zip(actions, scores) if s == best_score]
     return int(rng.choice(best)), best_score
