@@ -1,3 +1,4 @@
+import argparse
 from collections import deque
 
 import numpy as np
@@ -101,11 +102,22 @@ def save_transitions(path, transitions):
     )
 
 
-if __name__ == "__main__":
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", default="transitions_exhaustive.npz")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
     transitions, seen_states, terminal_states = enumerate_transitions()
-    save_transitions("transitions_exhaustive.npz", transitions)
+    save_transitions(args.out, transitions)
 
     print(f"state-action transitions: {len(transitions)}")
     print(f"reachable states including terminal: {len(seen_states)}")
     print(f"terminal states: {len(terminal_states)}")
-    print("saved: transitions_exhaustive.npz")
+    print(f"saved: {args.out}")
+
+
+if __name__ == "__main__":
+    main()

@@ -5,9 +5,7 @@ import torch.nn as nn
 
 
 def encode(states, actions):
-    assert (
-        states.shape[1] == 10
-    ), f"ожидал 10 колонок (доска+игрок), получил {states.shape}"
+    assert states.shape[1] == 10, f"expected 10, got {states.shape}"
     boards = states[:, :9]
     players = states[:, 9:10]
     board_onehot = np.zeros((len(states), 9, 3), dtype=np.float32)
@@ -58,15 +56,15 @@ def train(model, x, boards_t, rewards_t, dones_t, epochs=20, batch_size=512):
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     n = len(x)
     for epoch in range(epochs):
-        perm = torch.randperm(n)  # перетасовка примеров каждую эпоху
+        perm = torch.randperm(n)
         total = 0.0
         for i in range(0, n, batch_size):
             idx = perm[i : i + batch_size]
             loss = compute_loss(
                 model, x[idx], boards_t[idx], rewards_t[idx], dones_t[idx]
             )
-            opt.zero_grad()  # обнулить градиенты с прошлого шага
-            loss.backward()  # посчитать новые (backprop)
-            opt.step()  # сдвинуть веса
-            total += loss.item() * len(idx)  # .item() — из тензора в число
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            total += loss.item() * len(idx)
         print(f"epoch {epoch}: loss {total / n:.4f}")

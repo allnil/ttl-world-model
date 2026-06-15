@@ -72,7 +72,7 @@ def choose_move_two_step(model, state):
             opponent_scores = []
 
             for opponent_action in legal_actions_from_state(next_state):
-                _, opponent_reward, opponent_done = predict_next_state(
+                _, opponent_reward, _ = predict_next_state(
                     model, next_state, opponent_action
                 )
                 opponent_scores.append(reward_for_player(opponent_reward, player))
@@ -89,54 +89,76 @@ def choose_move_two_step(model, state):
     return int(best_action), best_score
 
 
-cache = {}
+class MinimaxAgent:
+    def __init__(self, model, depth, rng=None):
+        if depth < 1:
+            raise ValueError(f"minimax depth must be >= 1, got {depth}")
+
+        self.model = model
+        self.depth = int(depth)
+        self.rng = rng if rng is not None else np.random.default_rng()
+        self.cache = {}
+        self.model.eval()
+
+    def cache_key(self, state, depth, root_player):
+        normalized_state = np.asarray(state, dtype=np.int8).tobytes()
+        return normalized_state, int(depth), int(root_player)
+
+    def minimax_score(self, state, depth, root_player):
+        key = self.cache_key(state, depth, root_player)
+        if key in self.cache:
+            return self.cache[key]
+        actions = legal_actions_from_state(state)
+        if depth <= 0 or len(actions) == 0:
+            return 0
+        current_player = int(state[9])
+        next_boards, rewards, dones = predict_transitions(self.model, state, actions)
+
+        scores = []
+        for next_board, reward, done in zip(next_boards, rewards, dones):
+            if done:
+                scores.append(reward_for_player(int(reward), root_player))
+            else:
+                next_state = np.append(next_board, -current_player).astype(np.int8)
+                scores.append(self.minimax_score(next_state, depth - 1, root_player))
+
+        if current_player == root_player:
+            result = max(scores)
+        else:
+            result = min(scores)
+
+        self.cache[key] = result
+        return result
+
+    def choose_move(self, state):
+        action_scores = self.score_actions(state)
+        if not action_scores:
+            raise ValueError("no legal actions available")
+
+        best_score = max(score for _, score in action_scores)
+        best = [action for action, score in action_scores if score == best_score]
+        return int(self.rng.choice(best)), best_score
+
+    def score_actions(self, state):
+        root_player = int(state[9])
+        action_scores = []
+
+        for action in legal_actions_from_state(state):
+            next_state, reward, done = predict_next_state(self.model, state, action)
+            if done:
+                score = reward_for_player(int(reward), root_player)
+            else:
+                score = self.minimax_score(next_state, self.depth - 1, root_player)
+            action_scores.append((int(action), score))
+
+        return action_scores
 
 
 def minimax_score(model, state, depth, root_player):
-    key = (state[:9].tobytes(), int(state[9]), depth, root_player)
-    if key in cache:
-        return cache[key]
-
-    actions = legal_actions_from_state(state)
-
-    if depth == 0 or len(actions) == 0:
-        return 0
-
-    current_player = int(state[9])
-    next_boards, rewards, dones = predict_transitions(model, state, actions)
-
-    scores = []
-    for next_board, reward, done in zip(next_boards, rewards, dones):
-        if done:
-            scores.append(reward_for_player(int(reward), root_player))
-        else:
-            next_state = np.append(next_board, -current_player).astype(np.int8)
-            scores.append(minimax_score(model, next_state, depth - 1, root_player))
-    result = 0
-    if current_player == root_player:
-        result = max(scores)
-    else:
-        result = min(scores)
-
-    cache[key] = result
-    return result
+    agent = MinimaxAgent(model, depth=max(1, int(depth)))
+    return agent.minimax_score(state, depth, root_player)
 
 
-def choose_move_minimax(model, state, depth, rng):
-    model.eval()
-    root_player = int(state[9])
-    actions = legal_actions_from_state(state)
-    if len(actions) == 0:
-        raise ValueError("no legal actions available")
-
-    scores = []
-    for action in actions:
-        next_state, reward, done = predict_next_state(model, state, action)
-        if done:
-            scores.append(reward_for_player(int(reward), root_player))
-        else:
-            scores.append(minimax_score(model, next_state, depth - 1, root_player))
-
-    best_score = max(scores)
-    best = [int(a) for a, s in zip(actions, scores) if s == best_score]
-    return int(rng.choice(best)), best_score
+def choose_move_minimax(model, state, depth, rng=None):
+    agent = MinimaxAgent(model, depth=depth, rng=rng)
+    return agent.choose_move(state)

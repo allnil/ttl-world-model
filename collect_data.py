@@ -1,4 +1,7 @@
+import argparse
+
 import numpy as np
+
 from ttt_env import TicTacToe
 
 
@@ -30,19 +33,36 @@ def dataset_unique_transitions(transitions):
     return len(tss_set)
 
 
+def save_dataset(path, transitions):
+    states, actions, next_states, rewards, dones = zip(*transitions)
+    np.savez(
+        path,
+        states=np.array(states, dtype=np.int8),
+        actions=np.array(actions, dtype=np.int8),
+        next_states=np.array(next_states, dtype=np.int8),
+        rewards=np.array(rewards, dtype=np.int8),
+        dones=np.array(dones, dtype=np.bool_),
+    )
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--games", type=int, default=20000)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--out", default="transitions.npz")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    data = collect_dataset(args.games, seed=args.seed)
+    save_dataset(args.out, data)
+    print(f"games: {args.games}")
+    print(f"seed: {args.seed}")
+    print(f"collected transitions: {len(data)}")
+    print(f"unique state-action pairs: {dataset_unique_transitions(data)}")
+    print(f"saved: {args.out}")
+
+
 if __name__ == "__main__":
-    dataset_sizes = [10, 100, 500, 1000, 5000, 10000, 100000]
-    for size in dataset_sizes:
-        data = collect_dataset(size)
-        states, actions, next_states, rewards, dones = zip(*data)
-        np.savez(
-            "transitions.npz",
-            states=np.array(states, dtype=np.int8),
-            actions=np.array(actions, dtype=np.int8),
-            next_states=np.array(next_states, dtype=np.int8),
-            rewards=np.array(rewards, dtype=np.int8),
-            dones=np.array(dones),
-        )
-        print(f"collected transitions: {len(data)}")
-        cnt = dataset_unique_transitions(data)
-        print(f"number of unit transitions state-action: {cnt}")
+    main()
