@@ -4,6 +4,112 @@ Tinkering and experimenting with a World Model concept on the most simple exampl
 
 Educational project.
 
+## Current architecture
+
+This project is a tiny model-based planning stack for tic-tac-toe. It is useful
+because the whole game is small enough to solve exactly, so learned components
+can be checked against ground truth.
+
+| Component | File | Contract |
+| --- | --- | --- |
+| Environment | `ttt_env.py` | True game rules, `state = 9 board cells + current_player` |
+| Exhaustive data | `enumerate_data.py` | All reachable state-action transitions |
+| World model | `world_model.py` | `state + action -> next_board, reward, done` |
+| Planner | `agent.py` | Minimax search inside the learned world model |
+| Value oracle | `value_oracle.py` | Exact minimax value for every reachable state |
+| Value model | `train_value.py` | `state -> {-1, 0, +1}` from X's perspective |
+| Experiments | `arena.py`, `experiment_*.py`, `Makefile` | Reproducible command surface |
+
+The important separation is:
+
+```text
+world model != value model != planner
+```
+
+The world model predicts transitions. The value model evaluates positions. The
+planner searches through imagined transitions and optionally calls the value
+model at the depth cutoff.
+
+## Reproducible commands
+
+Run these from this directory.
+
+```bash
+make eval
+uv run python eval_value.py
+make arena N=100 MATCHUPS=5:9,9:5
+make arena-value N=100 MATCHUPS=5:9 VALUE_SIDE=x
+make arena-value N=100 MATCHUPS=9:5 VALUE_SIDE=o
+make value-generalization VALUE_FRACTION=0.3
+make check
+```
+
+Useful build commands:
+
+```bash
+make data-exhaustive
+make data
+make train
+make value-oracle
+make train-value
+make eval-value
+```
+
+## Key results
+
+World model evaluation on the exhaustive transition set:
+
+| Examples | Board exact-match | Reward accuracy | Done accuracy |
+| ---: | ---: | ---: | ---: |
+| 16,167 | 100.0% | 100.0% | 100.0% |
+
+Value model evaluation on the exact value table:
+
+| Examples | Value accuracy | Empty-board value |
+| ---: | ---: | ---: |
+| 5,478 | 100.0% | 0 |
+
+One-sided value cutoff test, 200 games, seed 0:
+
+| Matchup | X wins | O wins | Draws | Lesson |
+| --- | ---: | ---: | ---: | --- |
+| X depth 5 vs O depth 9 | 0 | 16 | 184 | Plain depth-5 X has a horizon hole |
+| X depth 5 + value vs O depth 9 | 0 | 0 | 200 | Value closes the X-side horizon hole |
+| X depth 9 vs O depth 5 | 146 | 0 | 54 | Plain depth-5 O is strongly exploitable |
+| X depth 9 vs O depth 5 + value | 0 | 0 | 200 | Value closes the O-side horizon hole |
+
+Generalization check, training `ValueNet` on 30% of value states and testing on
+the remaining 70%:
+
+| Split / class | Accuracy |
+| --- | ---: |
+| Train | 100.0% |
+| Test | 79.9% |
+| Test value `-1` | 72.2% |
+| Test value `0` | 72.0% |
+| Test value `1` | 86.8% |
+
+Full value training is a neural tablebase: the model sees all reachable states
+and compresses the solved game into weights. The 30%/70% experiment is the first
+real generalization check: the model memorizes the training subset but makes
+mistakes on unseen states.
+
+More details live in `VALUE_HEAD_EXPERIMENT.md`.
+
+## Next steps
+
+1. **MCTS.** Replace exhaustive minimax with Monte Carlo Tree Search while
+   reusing the same learned world model and value model. This is the cleanest
+   bridge toward AlphaZero-style planning.
+2. **Policy head.** Add `policy(state) -> action prior` so search does not need
+   to treat all legal moves equally. Value reduces effective depth; policy
+   reduces effective breadth.
+3. **Partial-value robustness.** Use `value_partial.pt` inside planning and
+   measure how value prediction errors affect play. This connects model
+   accuracy to downstream decision quality.
+4. **GridWorld / MiniGrid.** Move to a slightly larger environment where exact
+   enumeration may still be possible at first, then deliberately disappears.
+
 # bugs which occured during development with fixes and motivation/context around:
 
 ### 1. Player sign flip typo (`ttt_env.py`)

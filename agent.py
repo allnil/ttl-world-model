@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+from train_value import predict_value
 from world_model import encode
 
 
@@ -90,15 +91,18 @@ def choose_move_two_step(model, state):
 
 
 class MinimaxAgent:
-    def __init__(self, model, depth, rng=None):
+    def __init__(self, model, depth, rng=None, value_model=None):
         if depth < 1:
             raise ValueError(f"minimax depth must be >= 1, got {depth}")
 
         self.model = model
+        self.value_model = value_model
         self.depth = int(depth)
         self.rng = rng if rng is not None else np.random.default_rng()
         self.cache = {}
         self.model.eval()
+        if self.value_model is not None:
+            self.value_model.eval()
 
     def cache_key(self, state, depth, root_player):
         normalized_state = np.asarray(state, dtype=np.int8).tobytes()
@@ -109,8 +113,10 @@ class MinimaxAgent:
         if key in self.cache:
             return self.cache[key]
         actions = legal_actions_from_state(state)
-        if depth <= 0 or len(actions) == 0:
+        if len(actions) == 0:
             return 0
+        if depth <= 0:
+            return self.evaluate_cutoff(state, root_player)
         current_player = int(state[9])
         next_boards, rewards, dones = predict_transitions(self.model, state, actions)
 
@@ -129,6 +135,15 @@ class MinimaxAgent:
 
         self.cache[key] = result
         return result
+
+    def evaluate_cutoff(self, state, root_player):
+        if self.value_model is None:
+            return 0
+
+        # ValueNet predicts from X's perspective; minimax scores are from
+        # root_player's perspective, so O-rooted searches need a sign flip.
+        value_x = predict_value(self.value_model, state)
+        return reward_for_player(value_x, root_player)
 
     def choose_move(self, state):
         action_scores = self.score_actions(state)
@@ -152,13 +167,3 @@ class MinimaxAgent:
             action_scores.append((int(action), score))
 
         return action_scores
-
-
-def minimax_score(model, state, depth, root_player):
-    agent = MinimaxAgent(model, depth=max(1, int(depth)))
-    return agent.minimax_score(state, depth, root_player)
-
-
-def choose_move_minimax(model, state, depth, rng=None):
-    agent = MinimaxAgent(model, depth=depth, rng=rng)
-    return agent.choose_move(state)
