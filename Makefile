@@ -13,6 +13,8 @@ BATCH ?= 512
 VALUE_EPOCHS ?= 200
 N ?= 100
 DEPTH ?= 5
+ALPHA_BETA_DEPTH ?= 7
+ORDER ?= none
 MATCHUPS ?= 5:5,5:9,6:9,9:9
 DEPTH_X ?= 5
 DEPTH_O ?= 9
@@ -26,7 +28,7 @@ WEAK_DEPTH ?= 9
 NAIVE_N ?= 100
 NAIVE_DEPTH ?= 9
 
-.PHONY: help sync data data-random data-exhaustive train eval value-oracle train-value eval-value arena arena-value value-generalization loss-forensics ladder weak-model weak-coverage naive-opponent notebook-check check full
+.PHONY: help sync data data-random data-exhaustive train eval value-oracle train-value eval-value arena arena-value value-generalization alpha-beta loss-forensics ladder weak-model weak-coverage naive-opponent notebook-check check full
 
 help:
 	@printf "Targets:\n"
@@ -41,6 +43,7 @@ help:
 	@printf "  make arena N=100 DEPTH=5          run random baseline and minimax self-play\n"
 	@printf "  make arena-value                  run arena with value cutoff enabled\n"
 	@printf "  make value-generalization         train value on a subset and test holdout accuracy\n"
+	@printf "  make alpha-beta                   compare minimax vs alpha-beta node counts\n"
 	@printf "  make loss-forensics               replay X depth 5 losses vs O depth 9\n"
 	@printf "  make ladder                       one-step/two-step/minimax vs random\n"
 	@printf "  make weak-model                   weak model exact-match plus winrate\n"
@@ -51,7 +54,7 @@ help:
 	@printf "\nUseful variables:\n"
 	@printf "  DATA=$(DATA) EXHAUSTIVE=$(EXHAUSTIVE) CHECKPOINT=$(CHECKPOINT) VALUE_CHECKPOINT=$(VALUE_CHECKPOINT) VALUE_SIDE=$(VALUE_SIDE) VALUE_FRACTION=$(VALUE_FRACTION)\n"
 	@printf "  GAMES=$(GAMES) SEED=$(SEED) EPOCHS=$(EPOCHS) VALUE_EPOCHS=$(VALUE_EPOCHS) BATCH=$(BATCH)\n"
-	@printf "  N=$(N) DEPTH=$(DEPTH) MATCHUPS=$(MATCHUPS)\n"
+	@printf "  N=$(N) DEPTH=$(DEPTH) ALPHA_BETA_DEPTH=$(ALPHA_BETA_DEPTH) ORDER=$(ORDER) MATCHUPS=$(MATCHUPS)\n"
 	@printf "  DEPTH_X=$(DEPTH_X) DEPTH_O=$(DEPTH_O) MAX_REPLAYS=$(MAX_REPLAYS)\n"
 	@printf "  LADDER_N=$(LADDER_N) LADDER_DEPTH=$(LADDER_DEPTH)\n"
 	@printf "  WEAK_GAMES='$(WEAK_GAMES)' WEAK_EPOCHS=$(WEAK_EPOCHS) WEAK_ARENA_N=$(WEAK_ARENA_N) WEAK_DEPTH=$(WEAK_DEPTH)\n"
@@ -92,6 +95,9 @@ arena-value:
 value-generalization:
 	$(PY) experiment_value_generalization.py --train-fraction $(VALUE_FRACTION) --seed $(SEED)
 
+alpha-beta:
+	$(PY) experiment_alpha_beta.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --ordering $(ORDER) --depth $(ALPHA_BETA_DEPTH)
+
 loss-forensics:
 	$(PY) experiment_loss_forensics.py --checkpoint $(CHECKPOINT) --games $(N) --seed $(SEED) --depth-x $(DEPTH_X) --depth-o $(DEPTH_O) --max-replays $(MAX_REPLAYS)
 
@@ -111,7 +117,7 @@ notebook-check:
 	rm -f /tmp/ttt-world-model-experiments-check.ipynb
 
 check:
-	$(PY) -m py_compile collect_data.py enumerate_data.py world_model.py train_world_model.py eval_world_model.py value_oracle.py train_value.py eval_value.py agent.py arena.py experiment_loss_forensics.py experiment_ladder.py experiment_weak_model_coverage.py experiment_value_generalization.py experiment_naive_opponent.py
+	$(PY) -m py_compile collect_data.py enumerate_data.py world_model.py train_world_model.py eval_world_model.py value_oracle.py train_value.py eval_value.py agent.py arena.py experiment_loss_forensics.py experiment_ladder.py experiment_weak_model_coverage.py experiment_value_generalization.py experiment_alpha_beta.py experiment_naive_opponent.py
 	$(MAKE) eval
 
-full: data-exhaustive data train eval arena loss-forensics ladder weak-model naive-opponent
+full: data-exhaustive data train eval value-oracle train-value eval-value arena arena-value value-generalization alpha-beta loss-forensics ladder weak-model naive-opponent

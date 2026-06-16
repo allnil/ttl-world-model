@@ -41,6 +41,7 @@ make arena N=100 MATCHUPS=5:9,9:5
 make arena-value N=100 MATCHUPS=5:9 VALUE_SIDE=x
 make arena-value N=100 MATCHUPS=9:5 VALUE_SIDE=o
 make value-generalization VALUE_FRACTION=0.3
+make alpha-beta
 make check
 ```
 
@@ -94,7 +95,33 @@ and compresses the solved game into weights. The 30%/70% experiment is the first
 real generalization check: the model memorizes the training subset but makes
 mistakes on unseen states.
 
+Alpha-beta pruning check, empty board, depth 9:
+
+| Search | Nodes | Cutoffs | Result |
+| --- | ---: | ---: | --- |
+| Plain minimax | 294,777 | 0 | Same root scores |
+| Alpha-beta | 18,194 | 13,640 | Same root scores |
+| Alpha-beta + value ordering | 3,829 | 2,844 | Same root scores |
+
+Alpha-beta preserved the minimax result while reducing searched nodes by 93.8%.
+Adding value-based move ordering reduced searched nodes by 98.7%. This is a
+search optimization, not a new evaluator: same answer, less inference work
+through the learned world model.
+
 More details live in `VALUE_HEAD_EXPERIMENT.md`.
+
+## Progress log
+
+- [x] Learned world model reaches 100% transition/reward/done accuracy on the
+  exhaustive tic-tac-toe transition set.
+- [x] Value oracle solves all 5,478 reachable states and trains a 100% accurate
+  `ValueNet` on the full table.
+- [x] Value cutoff closes the depth-5 horizon hole against plain depth-9
+  minimax in one-sided tests.
+- [x] Alpha-beta pruning preserves minimax root scores while cutting depth-9
+  searched nodes from 294,777 to 18,194.
+- [x] Value-based move ordering preserves root scores and cuts depth-9 searched
+  nodes further to 3,829.
 
 ## Next steps
 
