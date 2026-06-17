@@ -37,6 +37,12 @@ class ValueNet(nn.Module):
 
 
 def predict_value(model, state):
+    """Return the hard value class: -1, 0, or +1.
+
+    This is correct when the value model is used as a solved tablebase proxy
+    (`value.pt` is 100% accurate). For weaker models it throws away confidence:
+    51% win and 99% win both become +1.
+    """
     model.eval()
     x = encode_value_states(state[None, :])
 
@@ -45,6 +51,28 @@ def predict_value(model, state):
 
     value_class = int(logits.argmax(dim=1).item())
     return value_class - 1
+
+
+def predict_value_expected(model, state):
+    """Return E[value] from the model's class probabilities.
+
+    ValueNet is trained as a 3-class classifier over {-1, 0, +1}. MCTS needs a
+    scalar leaf estimate, and for an imperfect classifier the expected value is
+    more informative than the hard argmax class:
+
+        E[V] = P(+1) - P(-1)
+
+    Draw probability contributes 0. The result is a float in [-1, +1].
+    """
+    model.eval()
+    x = encode_value_states(state[None, :])
+
+    with torch.no_grad():
+        logits = model(x)
+        probs = torch.softmax(logits, dim=1)
+
+    scores = torch.tensor([-1.0, 0.0, 1.0], dtype=probs.dtype)
+    return float((probs * scores).sum(dim=1).item())
 
 
 def train(model, x, targets, epochs=200, batch_size=512):

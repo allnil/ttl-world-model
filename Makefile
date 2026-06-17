@@ -15,6 +15,13 @@ N ?= 100
 DEPTH ?= 5
 ALPHA_BETA_DEPTH ?= 7
 ORDER ?= none
+MCTS_SIMS ?= 100
+MCTS_SWEEP ?= 10 50 100 200 500
+MCTS_EXPLORATION ?= 1.4
+MCTS_VALUE_MODE ?= expected
+MCTS_SEEDS ?= 0 1 2
+MCTS_MATCHUPS ?= mcts-minimax minimax-mcts
+WEAK_VALUE_CHECKPOINT ?= value_partial.pt
 MATCHUPS ?= 5:5,5:9,6:9,9:9
 DEPTH_X ?= 5
 DEPTH_O ?= 9
@@ -28,7 +35,7 @@ WEAK_DEPTH ?= 9
 NAIVE_N ?= 100
 NAIVE_DEPTH ?= 9
 
-.PHONY: help sync data data-random data-exhaustive train eval value-oracle train-value eval-value arena arena-value value-generalization alpha-beta loss-forensics ladder weak-model weak-coverage naive-opponent notebook-check check full
+.PHONY: help sync data data-random data-exhaustive train eval value-oracle train-value eval-value arena arena-value arena-mcts mcts-sweep mcts-sweep-weak mcts-multiseed mcts-multiseed-weak value-generalization alpha-beta mcts loss-forensics ladder weak-model weak-coverage naive-opponent notebook-check check full
 
 help:
 	@printf "Targets:\n"
@@ -42,8 +49,14 @@ help:
 	@printf "  make eval-value                   evaluate ValueNet checkpoint\n"
 	@printf "  make arena N=100 DEPTH=5          run random baseline and minimax self-play\n"
 	@printf "  make arena-value                  run arena with value cutoff enabled\n"
+	@printf "  make arena-mcts                   run one configured MCTS arena matchup\n"
+	@printf "  make mcts-sweep                   run MCTS simulation-budget sweep\n"
+	@printf "  make mcts-sweep-weak              run MCTS sweep with partial ValueNet\n"
+	@printf "  make mcts-multiseed               run MCTS sweep across seeds with mean/std\n"
+	@printf "  make mcts-multiseed-weak          run weak-value MCTS mean/std sweep\n"
 	@printf "  make value-generalization         train value on a subset and test holdout accuracy\n"
 	@printf "  make alpha-beta                   compare minimax vs alpha-beta node counts\n"
+	@printf "  make mcts                         run MCTS root-action experiment\n"
 	@printf "  make loss-forensics               replay X depth 5 losses vs O depth 9\n"
 	@printf "  make ladder                       one-step/two-step/minimax vs random\n"
 	@printf "  make weak-model                   weak model exact-match plus winrate\n"
@@ -54,7 +67,7 @@ help:
 	@printf "\nUseful variables:\n"
 	@printf "  DATA=$(DATA) EXHAUSTIVE=$(EXHAUSTIVE) CHECKPOINT=$(CHECKPOINT) VALUE_CHECKPOINT=$(VALUE_CHECKPOINT) VALUE_SIDE=$(VALUE_SIDE) VALUE_FRACTION=$(VALUE_FRACTION)\n"
 	@printf "  GAMES=$(GAMES) SEED=$(SEED) EPOCHS=$(EPOCHS) VALUE_EPOCHS=$(VALUE_EPOCHS) BATCH=$(BATCH)\n"
-	@printf "  N=$(N) DEPTH=$(DEPTH) ALPHA_BETA_DEPTH=$(ALPHA_BETA_DEPTH) ORDER=$(ORDER) MATCHUPS=$(MATCHUPS)\n"
+	@printf "  N=$(N) DEPTH=$(DEPTH) ALPHA_BETA_DEPTH=$(ALPHA_BETA_DEPTH) ORDER=$(ORDER) MCTS_SIMS=$(MCTS_SIMS) MCTS_SWEEP='$(MCTS_SWEEP)' MCTS_EXPLORATION=$(MCTS_EXPLORATION) MCTS_VALUE_MODE=$(MCTS_VALUE_MODE) MCTS_SEEDS='$(MCTS_SEEDS)' MCTS_MATCHUPS='$(MCTS_MATCHUPS)' MATCHUPS=$(MATCHUPS)\n"
 	@printf "  DEPTH_X=$(DEPTH_X) DEPTH_O=$(DEPTH_O) MAX_REPLAYS=$(MAX_REPLAYS)\n"
 	@printf "  LADDER_N=$(LADDER_N) LADDER_DEPTH=$(LADDER_DEPTH)\n"
 	@printf "  WEAK_GAMES='$(WEAK_GAMES)' WEAK_EPOCHS=$(WEAK_EPOCHS) WEAK_ARENA_N=$(WEAK_ARENA_N) WEAK_DEPTH=$(WEAK_DEPTH)\n"
@@ -92,11 +105,29 @@ arena:
 arena-value:
 	$(PY) arena.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --value-side $(VALUE_SIDE) --games $(N) --depth $(DEPTH) --seed $(SEED) --matchups "$(MATCHUPS)"
 
+arena-mcts:
+	$(PY) arena.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --x-agent mcts --o-agent minimax --depth-x $(DEPTH_X) --depth-o $(DEPTH_O) --mcts-sims $(MCTS_SIMS) --mcts-exploration $(MCTS_EXPLORATION) --mcts-value-mode $(MCTS_VALUE_MODE) --games $(N) --seed $(SEED)
+
+mcts-sweep:
+	$(PY) experiment_mcts_sweep.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --simulations $(MCTS_SWEEP) --games $(N) --seed $(SEED) --minimax-depth $(DEPTH_O) --exploration $(MCTS_EXPLORATION) --value-mode $(MCTS_VALUE_MODE)
+
+mcts-sweep-weak:
+	$(PY) experiment_mcts_sweep.py --checkpoint $(CHECKPOINT) --value-checkpoint $(WEAK_VALUE_CHECKPOINT) --simulations $(MCTS_SWEEP) --games $(N) --seed $(SEED) --minimax-depth $(DEPTH_O) --exploration $(MCTS_EXPLORATION) --value-mode $(MCTS_VALUE_MODE)
+
+mcts-multiseed:
+	$(PY) experiment_mcts_multiseed.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --simulations $(MCTS_SWEEP) --games $(N) --seeds $(MCTS_SEEDS) --minimax-depth $(DEPTH_O) --exploration $(MCTS_EXPLORATION) --value-mode $(MCTS_VALUE_MODE) --matchups $(MCTS_MATCHUPS)
+
+mcts-multiseed-weak:
+	$(PY) experiment_mcts_multiseed.py --checkpoint $(CHECKPOINT) --value-checkpoint $(WEAK_VALUE_CHECKPOINT) --simulations $(MCTS_SWEEP) --games $(N) --seeds $(MCTS_SEEDS) --minimax-depth $(DEPTH_O) --exploration $(MCTS_EXPLORATION) --value-mode $(MCTS_VALUE_MODE) --matchups $(MCTS_MATCHUPS)
+
 value-generalization:
 	$(PY) experiment_value_generalization.py --train-fraction $(VALUE_FRACTION) --seed $(SEED)
 
 alpha-beta:
 	$(PY) experiment_alpha_beta.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --ordering $(ORDER) --depth $(ALPHA_BETA_DEPTH)
+
+mcts:
+	$(PY) experiment_mcts.py --checkpoint $(CHECKPOINT) --value-checkpoint $(VALUE_CHECKPOINT) --simulations $(MCTS_SIMS) --depth $(DEPTH) --seed $(SEED) --exploration $(MCTS_EXPLORATION) --value-mode $(MCTS_VALUE_MODE)
 
 loss-forensics:
 	$(PY) experiment_loss_forensics.py --checkpoint $(CHECKPOINT) --games $(N) --seed $(SEED) --depth-x $(DEPTH_X) --depth-o $(DEPTH_O) --max-replays $(MAX_REPLAYS)
@@ -117,7 +148,7 @@ notebook-check:
 	rm -f /tmp/ttt-world-model-experiments-check.ipynb
 
 check:
-	$(PY) -m py_compile collect_data.py enumerate_data.py world_model.py train_world_model.py eval_world_model.py value_oracle.py train_value.py eval_value.py agent.py arena.py experiment_loss_forensics.py experiment_ladder.py experiment_weak_model_coverage.py experiment_value_generalization.py experiment_alpha_beta.py experiment_naive_opponent.py
+	$(PY) -m py_compile collect_data.py enumerate_data.py world_model.py train_world_model.py eval_world_model.py value_oracle.py train_value.py eval_value.py agent.py arena.py mcts_agent.py experiment_loss_forensics.py experiment_ladder.py experiment_weak_model_coverage.py experiment_value_generalization.py experiment_alpha_beta.py experiment_mcts.py experiment_mcts_sweep.py experiment_mcts_multiseed.py experiment_naive_opponent.py
 	$(MAKE) eval
 
-full: data-exhaustive data train eval value-oracle train-value eval-value arena arena-value value-generalization alpha-beta loss-forensics ladder weak-model naive-opponent
+full: data-exhaustive data train eval value-oracle train-value eval-value arena arena-value arena-mcts mcts-sweep value-generalization alpha-beta mcts loss-forensics ladder weak-model naive-opponent

@@ -5,9 +5,21 @@ import numpy as np
 import torch
 
 from agent import MinimaxAgent
+from mcts_agent import MCTSAgent, VALUE_MODES
 from ttt_env import TicTacToe
 from train_value import ValueNet
 from world_model import WorldModel
+
+AGENT_KINDS = ("random", "minimax", "minimax-value", "mcts")
+
+
+class RandomAgent:
+    def __init__(self, rng):
+        self.rng = rng
+
+    def choose_move(self, state):
+        legal_actions = np.where(state[:9] == 0)[0]
+        return int(self.rng.choice(legal_actions)), 0
 
 
 def load_model(path):
@@ -52,6 +64,128 @@ def agent_label(depth, player, value_model, value_side):
     has_value = value_for_side(value_model, value_side, player) is not None
     suffix = " + value" if has_value else ""
     return f"minimax depth {depth}{suffix}"
+
+
+def make_agent(
+    kind,
+    model,
+    value_model,
+    depth,
+    mcts_sims,
+    mcts_exploration,
+    mcts_value_mode,
+    rng,
+):
+    if kind == "random":
+        return RandomAgent(rng)
+    if kind == "minimax":
+        return MinimaxAgent(model, depth=depth, rng=rng)
+    if kind == "minimax-value":
+        if value_model is None:
+            raise ValueError("minimax-value requires --value-checkpoint")
+        return MinimaxAgent(model, depth=depth, rng=rng, value_model=value_model)
+    if kind == "mcts":
+        if value_model is None:
+            raise ValueError("mcts requires --value-checkpoint")
+        return MCTSAgent(
+            model,
+            value_model,
+            simulations=mcts_sims,
+            exploration=mcts_exploration,
+            value_mode=mcts_value_mode,
+            rng=rng,
+        )
+    raise ValueError(f"unknown agent kind: {kind}")
+
+
+def agent_kind_label(kind, depth, mcts_sims, mcts_value_mode):
+    if kind == "random":
+        return "random"
+    if kind == "minimax":
+        return f"minimax depth {depth}"
+    if kind == "minimax-value":
+        return f"minimax depth {depth} + value"
+    if kind == "mcts":
+        return f"MCTS {mcts_sims} sims ({mcts_value_mode} value)"
+    raise ValueError(f"unknown agent kind: {kind}")
+
+
+def play_configured_agents(
+    model,
+    value_model,
+    x_agent_kind,
+    o_agent_kind,
+    depth_x,
+    depth_o,
+    mcts_sims,
+    mcts_exploration,
+    mcts_value_mode,
+    seed,
+):
+    rng = np.random.default_rng(seed)
+    agent_x = make_agent(
+        x_agent_kind,
+        model,
+        value_model,
+        depth_x,
+        mcts_sims,
+        mcts_exploration,
+        mcts_value_mode,
+        rng,
+    )
+    agent_o = make_agent(
+        o_agent_kind,
+        model,
+        value_model,
+        depth_o,
+        mcts_sims,
+        mcts_exploration,
+        mcts_value_mode,
+        rng,
+    )
+    env = TicTacToe()
+    state = env.reset()
+    done = False
+
+    while not done:
+        player = int(state[9])
+        if player == 1:
+            action, _score = agent_x.choose_move(state)
+        else:
+            action, _score = agent_o.choose_move(state)
+        state, reward, done = env.step(action)
+
+    return int(reward)
+
+
+def run_configured_agents(
+    model,
+    value_model,
+    x_agent_kind,
+    o_agent_kind,
+    depth_x,
+    depth_o,
+    mcts_sims,
+    mcts_exploration,
+    mcts_value_mode,
+    n_games,
+    base_seed,
+):
+    return [
+        play_configured_agents(
+            model,
+            value_model,
+            x_agent_kind,
+            o_agent_kind,
+            depth_x,
+            depth_o,
+            mcts_sims,
+            mcts_exploration,
+            mcts_value_mode,
+            base_seed + game_id,
+        )
+        for game_id in range(n_games)
+    ]
 
 
 def play_agent_vs_random(model, depth, seed, value_model=None, value_side="none"):
@@ -123,6 +257,14 @@ def summarize_results(results):
     print(f"draws: {draws}")
 
 
+def result_counts(results):
+    return {
+        "x_wins": sum(result == 1 for result in results),
+        "o_wins": sum(result == -1 for result in results),
+        "draws": sum(result == 0 for result in results),
+    }
+
+
 def run_agent_vs_random(
     model,
     depth,
@@ -184,6 +326,13 @@ def parse_args():
     )
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--depth", type=int, default=5)
+    parser.add_argument("--depth-x", type=int, default=None)
+    parser.add_argument("--depth-o", type=int, default=None)
+    parser.add_argument("--x-agent", choices=AGENT_KINDS, default=None)
+    parser.add_argument("--o-agent", choices=AGENT_KINDS, default=None)
+    parser.add_argument("--mcts-sims", type=int, default=100)
+    parser.add_argument("--mcts-exploration", type=float, default=1.4)
+    parser.add_argument("--mcts-value-mode", choices=VALUE_MODES, default="expected")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--matchups", default="5:5,5:9,6:9,9:9")
     return parser.parse_args()
@@ -194,6 +343,33 @@ def main():
     model = load_model(args.checkpoint)
     value_model = load_value_model(args.value_checkpoint)
     value_side = args.value_side if value_model is not None else "none"
+    depth_x = args.depth if args.depth_x is None else args.depth_x
+    depth_o = args.depth if args.depth_o is None else args.depth_o
+
+    if args.x_agent is not None or args.o_agent is not None:
+        if args.x_agent is None or args.o_agent is None:
+            raise ValueError("--x-agent and --o-agent must be provided together")
+        results = run_configured_agents(
+            model,
+            value_model,
+            args.x_agent,
+            args.o_agent,
+            depth_x,
+            depth_o,
+            args.mcts_sims,
+            args.mcts_exploration,
+            args.mcts_value_mode,
+            args.games,
+            args.seed,
+        )
+        print(
+            f"X = {agent_kind_label(args.x_agent, depth_x, args.mcts_sims, args.mcts_value_mode)}"
+        )
+        print(
+            f"O = {agent_kind_label(args.o_agent, depth_o, args.mcts_sims, args.mcts_value_mode)}"
+        )
+        summarize_results(results)
+        return
 
     random_results = run_agent_vs_random(
         model,
