@@ -18,18 +18,20 @@ can be checked against ground truth.
 | Minimax planner | `agent.py` | Exact depth-limited search inside the learned world model |
 | Value oracle | `value_oracle.py` | Exact minimax value for every reachable state |
 | Value model | `train_value.py` | `state -> {-1, 0, +1}` from X's perspective |
-| MCTS planner | `mcts_agent.py` | Budgeted tree search using `WorldModel` expansion and `ValueNet` leaf evaluation |
+| Policy model | `train_policy.py` | `state -> action prior`, trained from oracle-optimal moves |
+| MCTS / PUCT planner | `mcts_agent.py` | Budgeted tree search using `WorldModel`, `ValueNet`, and optional policy priors |
 | Experiments | `arena.py`, `experiment_*.py`, `Makefile` | Reproducible command surface |
 
 The important separation is:
 
 ```text
-world model != value model != planner
+world model != value model != policy model != planner
 ```
 
 The world model predicts transitions. The value model evaluates positions. The
-planner searches through imagined transitions and optionally calls the value
-model at the depth cutoff.
+policy model suggests which actions are worth looking at first. The planner
+searches through imagined transitions and optionally uses value/policy models to
+guide that search.
 
 ## Reproducible commands
 
@@ -44,10 +46,14 @@ make arena-value N=100 MATCHUPS=9:5 VALUE_SIDE=o
 make value-generalization VALUE_FRACTION=0.3
 make alpha-beta
 make mcts MCTS_SIMS=500 DEPTH=9
+make puct MCTS_SIMS=500 DEPTH=9
 make arena-mcts N=50 MCTS_SIMS=100 DEPTH_X=9 DEPTH_O=9
+make arena-puct N=50 MCTS_SIMS=100 DEPTH_X=9 DEPTH_O=9
 make mcts-sweep N=50 MCTS_SWEEP='10 50 100 200 500' DEPTH_O=9
 make mcts-sweep-weak N=50 MCTS_SWEEP='10 50 200' DEPTH_O=9
 make mcts-multiseed N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
+make puct-multiseed N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
+make mcts-choice-analysis N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
 make check
 ```
 
@@ -60,6 +66,8 @@ make train
 make value-oracle
 make train-value
 make eval-value
+make train-policy
+make eval-policy
 ```
 
 ## Key results
@@ -75,6 +83,12 @@ Value model evaluation on the exact value table:
 | Examples | Value accuracy | Empty-board value |
 | ---: | ---: | ---: |
 | 5,478 | 100.0% | 0 |
+
+Policy model evaluation on oracle-optimal action targets:
+
+| Examples | Top-1 optimal action accuracy | Mean probability mass on optimal actions |
+| ---: | ---: | ---: |
+| 4,520 | 99.8% | 92.0% |
 
 One-sided value cutoff test, 200 games, seed 0:
 
@@ -202,6 +216,54 @@ risky lines until the search has enough structure or guidance to refute them.
 This is a motivation for the next steps: policy priors/PUCT, exploration tuning,
 and possibly minimax-style tactical backups.
 
+MCTS choice analysis, perfect value, `minimax X vs MCTS O`, 30 games per seed,
+seeds 0/1/2. This keeps the same MCTS machinery but changes the final action
+recommendation rule.
+
+| Sims | Choice rule | X wins | O wins | Draws |
+| ---: | --- | ---: | ---: | ---: |
+| 10 | visits | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| 10 | q | 1.0+/-0.0 | 0.0+/-0.0 | 29.0+/-0.0 |
+| 10 | minimax-check top-3 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| 50 | visits | 1.0+/-0.0 | 0.0+/-0.0 | 29.0+/-0.0 |
+| 50 | q | 7.3+/-0.5 | 0.0+/-0.0 | 22.7+/-0.5 |
+| 50 | minimax-check top-3 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| 200 | visits | 4.7+/-0.5 | 0.0+/-0.0 | 25.3+/-0.5 |
+| 200 | q | 5.7+/-0.5 | 0.0+/-0.0 | 24.3+/-0.5 |
+| 200 | minimax-check top-3 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+
+Result: q-based final selection does not fix the failure; it is often worse.
+But a small minimax safety check over the top-3 visited MCTS moves restores all
+draws in this test. That means MCTS usually surfaces safe actions near the top,
+but vanilla sampled-average/visit-count recommendation is not tactical enough
+against a perfect minimax opponent.
+
+PUCT adds the learned policy prior into selection:
+
+```text
+score(s,a) = Q(s,a) + c * P(s,a) * sqrt(N(s)) / (1 + N(s,a))
+```
+
+`P(s,a)` is the PolicyNet prior over legal actions. It does not replace search;
+it biases search toward actions that the policy believes are plausible. In this
+toy project the policy is supervised from the oracle, not learned by self-play.
+
+PUCT robustness, perfect value + policy prior, 30 games per seed, seeds 0/1/2:
+
+| Matchup | Sims | X wins | O wins | Draws |
+| --- | ---: | ---: | ---: | ---: |
+| PUCT X vs minimax O | 10 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| PUCT X vs minimax O | 50 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| PUCT X vs minimax O | 200 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| minimax X vs PUCT O | 10 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| minimax X vs PUCT O | 50 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+| minimax X vs PUCT O | 200 | 0.0+/-0.0 | 0.0+/-0.0 | 30.0+/-0.0 |
+
+Compared with vanilla UCT, PUCT fixes the O-side finite-budget failure in this
+test. The reason is not magic: the policy prior makes MCTS spend its early
+budget on tactically plausible moves instead of treating all legal actions as
+equally worth exploring.
+
 Reproduce:
 
 ```bash
@@ -209,6 +271,8 @@ make mcts-sweep N=50 MCTS_SWEEP='10 50 200'    # perfect value (value.pt, the de
 make mcts-sweep-weak N=50 MCTS_SWEEP='10 50 200'
 make mcts-multiseed N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
 make mcts-multiseed-weak N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
+make mcts-choice-analysis N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
+make puct-multiseed N=30 MCTS_SWEEP='10 50 200' MCTS_SEEDS='0 1 2'
 ```
 
 More details live in `VALUE_HEAD_EXPERIMENT.md`.
@@ -233,23 +297,42 @@ More details live in `VALUE_HEAD_EXPERIMENT.md`.
 - [x] Weak-value MCTS sweep shows the sims-vs-value tradeoff directly.
 - [x] Multi-seed MCTS sweep reports mean/std and exposes a vanilla UCT O-side
   finite-budget failure mode.
+- [x] Choice analysis shows q-based final selection does not fix the O-side
+  failure, while minimax-check over top visited moves does.
+- [x] PolicyNet learns oracle-optimal action priors with 99.8% top-1 optimal
+  action accuracy.
+- [x] PUCT integrates policy priors into MCTS selection and fixes the observed
+  O-side finite-budget failure against minimax in the tested setting.
+
+## Current status
+
+The project now has a complete toy AlphaZero-shaped planning stack:
+
+```text
+WorldModel -> imagined transitions
+ValueNet   -> leaf evaluation
+PolicyNet  -> action priors
+PUCT       -> policy/value-guided search
+```
+
+This is still supervised by exact tic-tac-toe oracles, not self-play RL. The
+next conceptual jump is to stop using the oracle for policy targets and instead
+train policy from PUCT visit counts.
 
 ## Next steps
 
-1. **Policy head.** Add `policy(state) -> action prior` so search does not need
-   to treat all legal moves equally. Value reduces effective depth; policy
-   reduces effective breadth.
-2. **PUCT.** Add policy priors to MCTS selection and compare MCTS vs PUCT at the
-   same simulation budgets.
-3. **UCT failure analysis.** Compare visit-count move choice against q-based
-   choice, tune exploration, and test minimax/solver-style backups on tactical
-   states where vanilla MCTS as O loses.
-4. **Batching.** Batch value calls during MCTS evaluation so larger sweeps do not
+1. **PUCT stress tests.** Vary `MCTS_EXPLORATION`, weak policy/value checkpoints,
+   and tactical states to find where PUCT still fails.
+2. **Self-play policy improvement.** Train policy targets from MCTS/PUCT visit
+   counts instead of the exact oracle. This is the real AlphaZero-shaped loop.
+3. **Batching.** Batch value/policy calls during MCTS evaluation so larger sweeps do not
    spend most of their time in one-state neural-network inference.
-5. **GridWorld / MiniGrid.** Move to a slightly larger environment where exact
+4. **GridWorld / MiniGrid.** Move to a slightly larger environment where exact
    enumeration may still be possible at first, then deliberately disappears.
 
-# bugs which occured during development with fixes and motivation/context around:
+## Bug journal (fixes and context)
+
+Bugs that occurred during development, with their fixes and the lesson each one taught.
 
 ### 1. Player sign flip typo (`ttt_env.py`)
 `self.current_player -= self.current_player` set the player to 0 instead of flipping the sign. Next move silently wrote 0 to the board, and `_check_win(0)` matched an empty line — "emptiness won" and the game ended as a fake draw.

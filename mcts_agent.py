@@ -9,8 +9,10 @@ from agent import (
     reward_for_player,
 )
 from train_value import predict_value, predict_value_expected
+from train_policy import masked_policy_probs
 
 VALUE_MODES = ("class", "expected")
+CHOICE_MODES = ("visits", "q")
 
 
 """
@@ -51,9 +53,13 @@ All node values in this file are stored from the root player's perspective.
 That means X-rooted searches treat +1 as good for X, while O-rooted searches
 flip signs through `reward_for_player`.
 
-This is not AlphaZero yet. AlphaZero-style MCTS also uses a policy prior P(s,a)
-inside the selection formula. This file intentionally starts with UCB only, so
-the next policy-head step has a clean place to attach.
+If a policy model is provided, this becomes a small PUCT search:
+
+    score(s,a) = Q(s,a) + c * P(s,a) * sqrt(N(s)) / (1 + N(s,a))
+
+P(s,a) is the policy prior. It does not replace search; it biases search toward
+actions the policy thinks are plausible. With no policy model, the agent falls
+back to vanilla UCT.
 """
 
 
@@ -64,8 +70,10 @@ class MCTSNode:
     action: int | None = None
     untried_actions: list[int] = field(default_factory=list)
     children: dict[int, "MCTSNode"] = field(default_factory=dict)
+    action_priors: dict[int, float] = field(default_factory=dict)
     visits: int = 0
     value_sum: float = 0.0
+    prior: float = 0.0
     terminal_value: int | None = None
 
     @property
@@ -87,6 +95,7 @@ class MCTSAgent:
         simulations=100,
         exploration=1.4,
         value_mode="expected",
+        policy_model=None,
         rng=None,
     ):
         if simulations < 1:
@@ -99,25 +108,45 @@ class MCTSAgent:
         self.simulations = int(simulations)
         self.exploration = float(exploration)
         self.value_mode = value_mode
+        self.policy_model = policy_model
         self.rng = rng if rng is not None else np.random.default_rng()
         self.model.eval()
         self.value_model.eval()
+        if self.policy_model is not None:
+            self.policy_model.eval()
         self.last_root = None
 
-    def make_node(self, state, parent=None, action=None, terminal_value=None):
+    def make_node(self, state, parent=None, action=None, prior=0.0, terminal_value=None):
         actions = (
             []
             if terminal_value is not None
             else list(legal_actions_from_state(state))
         )
-        self.rng.shuffle(actions)
+        action_priors = self.action_priors(state, actions)
+        if self.policy_model is None:
+            self.rng.shuffle(actions)
+        else:
+            # `expand` pops from the end, so ascending sort expands high-prior
+            # actions first. PUCT will continue using the same priors later.
+            actions = sorted(actions, key=lambda a: action_priors[int(a)])
         return MCTSNode(
             state=np.asarray(state, dtype=np.int8),
             parent=parent,
             action=action,
             untried_actions=[int(action) for action in actions],
+            action_priors=action_priors,
+            prior=float(prior),
             terminal_value=terminal_value,
         )
+
+    def action_priors(self, state, actions):
+        actions = [int(action) for action in actions]
+        if not actions:
+            return {}
+        if self.policy_model is None:
+            uniform = 1.0 / len(actions)
+            return {action: uniform for action in actions}
+        return masked_policy_probs(self.policy_model, state, actions)
 
     def choose_move(self, state):
         root_player = int(state[9])
@@ -132,14 +161,38 @@ class MCTSAgent:
         if not root.children:
             raise ValueError("no legal actions available")
 
-        best_visits = max(child.visits for child in root.children.values())
-        best_actions = [
-            action
-            for action, child in root.children.items()
-            if child.visits == best_visits
-        ]
-        action = int(self.rng.choice(best_actions))
+        action = self.choose_from_root(root, mode="visits")
         return action, root.children[action].q
+
+    def choose_from_root(self, root, mode="visits"):
+        """Choose a final action from an already-built MCTS root.
+
+        This does not run more simulations. It is only the final recommendation
+        rule. `visits` is the robust-child rule used by AlphaZero-style MCTS;
+        `q` is useful for debugging whether the tree statistics already contain
+        a better action that visit-count selection ignores.
+        """
+        if mode not in CHOICE_MODES:
+            raise ValueError(f"mode must be one of {CHOICE_MODES}, got {mode!r}")
+        if not root.children:
+            raise ValueError("no legal actions available")
+
+        if mode == "visits":
+            best_score = max(child.visits for child in root.children.values())
+            best_actions = [
+                action
+                for action, child in root.children.items()
+                if child.visits == best_score
+            ]
+        else:
+            best_score = max(child.q for child in root.children.values())
+            best_actions = [
+                action
+                for action, child in root.children.items()
+                if child.q == best_score
+            ]
+
+        return int(self.rng.choice(best_actions))
 
     def select_and_expand(self, node, root_player):
         while not node.is_terminal:
@@ -158,6 +211,7 @@ class MCTSAgent:
             next_state,
             parent=node,
             action=action,
+            prior=node.action_priors.get(int(action), 0.0),
             terminal_value=terminal_value,
         )
         node.children[action] = child
@@ -171,9 +225,19 @@ class MCTSAgent:
             # `child.q` is from root perspective. At opponent nodes, lower q is
             # better for the opponent, so use -q as exploitation.
             exploitation = child.q if maximize_for_root else -child.q
-            exploration = self.exploration * math.sqrt(
-                math.log(node.visits + 1) / child.visits
-            )
+            if self.policy_model is None:
+                exploration = self.exploration * math.sqrt(
+                    math.log(node.visits + 1) / child.visits
+                )
+            else:
+                # PUCT: policy prior P(s,a) scales exploration. Good priors make
+                # promising/legal tactical moves get attention earlier.
+                exploration = (
+                    self.exploration
+                    * child.prior
+                    * math.sqrt(max(1, node.visits))
+                    / (1 + child.visits)
+                )
             return exploitation + exploration
 
         return max(node.children.values(), key=ucb)

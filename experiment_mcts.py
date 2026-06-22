@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from agent import MinimaxAgent
+from arena import load_policy_model
 from eval_value import load_value_model
 from mcts_agent import MCTSAgent, VALUE_MODES
 from world_model import WorldModel
@@ -26,6 +27,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=Path("wm.pt"))
     parser.add_argument("--value-checkpoint", type=Path, default=Path("value.pt"))
+    parser.add_argument("--policy-checkpoint", type=Path, default=None)
     parser.add_argument("--simulations", type=int, default=100)
     parser.add_argument("--depth", type=int, default=9)
     parser.add_argument("--seed", type=int, default=0)
@@ -39,6 +41,7 @@ def main():
     rng = np.random.default_rng(args.seed)
     model = load_model(args.checkpoint)
     value_model = load_value_model(args.value_checkpoint)
+    policy_model = load_policy_model(args.policy_checkpoint)
 
     state = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 1], dtype=np.int8)
     minimax = MinimaxAgent(model, depth=args.depth, rng=rng)
@@ -48,6 +51,7 @@ def main():
         simulations=args.simulations,
         exploration=args.exploration,
         value_mode=args.value_mode,
+        policy_model=policy_model,
         rng=rng,
     )
 
@@ -60,6 +64,7 @@ def main():
     print(f"mcts simulations: {args.simulations}")
     print(f"mcts exploration: {args.exploration}")
     print(f"mcts value mode: {args.value_mode}")
+    print(f"policy prior: {policy_model is not None}")
     print()
     print("action | minimax score | mcts visits | mcts q")
     for action_id, visits, value in mcts_stats:

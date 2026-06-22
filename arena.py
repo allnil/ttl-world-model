@@ -7,10 +7,11 @@ import torch
 from agent import MinimaxAgent
 from mcts_agent import MCTSAgent, VALUE_MODES
 from ttt_env import TicTacToe
+from train_policy import PolicyNet
 from train_value import ValueNet
 from world_model import WorldModel
 
-AGENT_KINDS = ("random", "minimax", "minimax-value", "mcts")
+AGENT_KINDS = ("random", "minimax", "minimax-value", "mcts", "puct")
 
 
 class RandomAgent:
@@ -48,6 +49,20 @@ def load_value_model(path):
     return model
 
 
+def load_policy_model(path):
+    if path is None:
+        return None
+    if not path.exists():
+        raise FileNotFoundError(
+            f"missing policy checkpoint: {path}. Run `uv run python train_policy.py` first."
+        )
+    model = PolicyNet()
+    state_dict = torch.load(path, map_location="cpu")
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
+
+
 def value_for_side(value_model, value_side, player):
     if value_model is None or value_side == "none":
         return None
@@ -70,6 +85,7 @@ def make_agent(
     kind,
     model,
     value_model,
+    policy_model,
     depth,
     mcts_sims,
     mcts_exploration,
@@ -95,6 +111,20 @@ def make_agent(
             value_mode=mcts_value_mode,
             rng=rng,
         )
+    if kind == "puct":
+        if value_model is None:
+            raise ValueError("puct requires --value-checkpoint")
+        if policy_model is None:
+            raise ValueError("puct requires --policy-checkpoint")
+        return MCTSAgent(
+            model,
+            value_model,
+            simulations=mcts_sims,
+            exploration=mcts_exploration,
+            value_mode=mcts_value_mode,
+            policy_model=policy_model,
+            rng=rng,
+        )
     raise ValueError(f"unknown agent kind: {kind}")
 
 
@@ -107,12 +137,15 @@ def agent_kind_label(kind, depth, mcts_sims, mcts_value_mode):
         return f"minimax depth {depth} + value"
     if kind == "mcts":
         return f"MCTS {mcts_sims} sims ({mcts_value_mode} value)"
+    if kind == "puct":
+        return f"PUCT {mcts_sims} sims ({mcts_value_mode} value + policy prior)"
     raise ValueError(f"unknown agent kind: {kind}")
 
 
 def play_configured_agents(
     model,
     value_model,
+    policy_model,
     x_agent_kind,
     o_agent_kind,
     depth_x,
@@ -127,6 +160,7 @@ def play_configured_agents(
         x_agent_kind,
         model,
         value_model,
+        policy_model,
         depth_x,
         mcts_sims,
         mcts_exploration,
@@ -137,6 +171,7 @@ def play_configured_agents(
         o_agent_kind,
         model,
         value_model,
+        policy_model,
         depth_o,
         mcts_sims,
         mcts_exploration,
@@ -161,6 +196,7 @@ def play_configured_agents(
 def run_configured_agents(
     model,
     value_model,
+    policy_model,
     x_agent_kind,
     o_agent_kind,
     depth_x,
@@ -175,6 +211,7 @@ def run_configured_agents(
         play_configured_agents(
             model,
             value_model,
+            policy_model,
             x_agent_kind,
             o_agent_kind,
             depth_x,
@@ -319,6 +356,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=Path("wm.pt"))
     parser.add_argument("--value-checkpoint", type=Path, default=None)
+    parser.add_argument("--policy-checkpoint", type=Path, default=None)
     parser.add_argument(
         "--value-side",
         choices=("none", "x", "o", "both"),
@@ -342,6 +380,7 @@ def main():
     args = parse_args()
     model = load_model(args.checkpoint)
     value_model = load_value_model(args.value_checkpoint)
+    policy_model = load_policy_model(args.policy_checkpoint)
     value_side = args.value_side if value_model is not None else "none"
     depth_x = args.depth if args.depth_x is None else args.depth_x
     depth_o = args.depth if args.depth_o is None else args.depth_o
@@ -352,6 +391,7 @@ def main():
         results = run_configured_agents(
             model,
             value_model,
+            policy_model,
             args.x_agent,
             args.o_agent,
             depth_x,

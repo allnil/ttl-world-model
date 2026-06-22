@@ -3,6 +3,7 @@ from pathlib import Path
 
 from arena import (
     load_model,
+    load_policy_model,
     load_value_model,
     result_counts,
     run_configured_agents,
@@ -16,6 +17,7 @@ def format_counts(counts):
 def run_matchup(
     model,
     value_model,
+    policy_model,
     x_agent,
     o_agent,
     depth_x,
@@ -29,6 +31,7 @@ def run_matchup(
     results = run_configured_agents(
         model,
         value_model,
+        policy_model,
         x_agent,
         o_agent,
         depth_x,
@@ -46,6 +49,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=Path("wm.pt"))
     parser.add_argument("--value-checkpoint", type=Path, default=Path("value.pt"))
+    parser.add_argument("--policy-checkpoint", type=Path, default=None)
     parser.add_argument("--simulations", type=int, nargs="+", default=[10, 50, 100, 200, 500])
     parser.add_argument("--games", type=int, default=50)
     parser.add_argument("--seed", type=int, default=0)
@@ -59,6 +63,7 @@ def main():
     args = parse_args()
     model = load_model(args.checkpoint)
     value_model = load_value_model(args.value_checkpoint)
+    policy_model = load_policy_model(args.policy_checkpoint)
 
     print("Format: X wins / O wins / draws")
     print(f"games per matchup: {args.games}")
@@ -72,6 +77,7 @@ def main():
         mcts_vs_random = run_matchup(
             model,
             value_model,
+            policy_model,
             "mcts",
             "random",
             args.minimax_depth,
@@ -85,6 +91,7 @@ def main():
         mcts_vs_minimax = run_matchup(
             model,
             value_model,
+            policy_model,
             "mcts",
             "minimax",
             args.minimax_depth,
@@ -98,6 +105,7 @@ def main():
         minimax_vs_mcts = run_matchup(
             model,
             value_model,
+            policy_model,
             "minimax",
             "mcts",
             args.minimax_depth,

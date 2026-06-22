@@ -5,6 +5,7 @@ import numpy as np
 
 from arena import (
     load_model,
+    load_policy_model,
     load_value_model,
     result_counts,
     run_configured_agents,
@@ -15,6 +16,8 @@ MATCHUPS = {
     "mcts-random": ("mcts", "random", "MCTS X vs random O"),
     "mcts-minimax": ("mcts", "minimax", "MCTS X vs minimax O"),
     "minimax-mcts": ("minimax", "mcts", "minimax X vs MCTS O"),
+    "puct-minimax": ("puct", "minimax", "PUCT X vs minimax O"),
+    "minimax-puct": ("minimax", "puct", "minimax X vs PUCT O"),
 }
 
 
@@ -23,11 +26,12 @@ def format_mean_std(values):
     return f"{values.mean():.1f}+/-{values.std(ddof=0):.1f}"
 
 
-def run_one(model, value_model, matchup_key, simulations, games, seed, args):
+def run_one(model, value_model, policy_model, matchup_key, simulations, games, seed, args):
     x_agent, o_agent, _label = MATCHUPS[matchup_key]
     results = run_configured_agents(
         model,
         value_model,
+        policy_model,
         x_agent,
         o_agent,
         args.minimax_depth,
@@ -45,6 +49,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, default=Path("wm.pt"))
     parser.add_argument("--value-checkpoint", type=Path, default=Path("value.pt"))
+    parser.add_argument("--policy-checkpoint", type=Path, default=None)
     parser.add_argument("--simulations", type=int, nargs="+", default=[10, 50, 200])
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--games", type=int, default=30)
@@ -64,6 +69,7 @@ def main():
     args = parse_args()
     model = load_model(args.checkpoint)
     value_model = load_value_model(args.value_checkpoint)
+    policy_model = load_policy_model(args.policy_checkpoint)
 
     print("Format: mean+/-std counts across seeds")
     print(f"games per seed: {args.games}")
@@ -83,6 +89,7 @@ def main():
                 run_one(
                     model,
                     value_model,
+                    policy_model,
                     matchup_key,
                     simulations,
                     args.games,
